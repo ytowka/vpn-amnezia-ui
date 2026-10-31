@@ -17,6 +17,8 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import awg_core as core
+import monitoring
+from urllib.parse import urlsplit, parse_qs
 
 ROOT = Path(__file__).parent
 STATE = Path(os.getenv('STATE_DIR', '/var/lib/amnezia-ui'))
@@ -28,6 +30,9 @@ S = core.Server(CONTAINER)
 LOCK = threading.RLock()
 SESSIONS = {}
 ATTEMPTS = {}
+MONITOR = monitoring.Monitor(STATE, CONTAINER, INTERFACE)
+DIAG_LOCK = threading.Lock()
+LAST_DIAG = 0
 
 def atomic(path, value):
     tmp = path.with_suffix('.tmp')
@@ -187,6 +192,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(401, {'error':'Войдите в консоль'})
             if self.path == '/api/session':
                 return self.send(200, {'csrf':session['csrf']})
+            url = urlsplit(self.path)
+            if url.path == '/api/metrics':
+                query = parse_qs(url.query)
+                key = query.get('peer', [''])[0]
+                hours = int(query.get('hours', ['1'])[0])
+                if hours not in (1, 6, 24) or (key and not re.fullmatch(r'[A-Za-z0-9+/]{43}=', key)):
+                    return self.send(400, {'error':'Неверные параметры графика'})
+                return self.send(200, MONITOR.history(key, hours))
             with locked():
                 if self.path == '/api/clients':
                     return self.send(200, listing())
@@ -242,6 +255,20 @@ class Handler(BaseHTTPRequestHandler):
                     for token in list(SESSIONS):
                         if SESSIONS[token] is session: del SESSIONS[token]
                 return self.send(200, {}, headers={'Set-Cookie':'session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0'})
+            if self.path == '/api/diagnostics':
+                key = data.get('key')
+                if key and not re.fullmatch(r'[A-Za-z0-9+/]{43}=', key):
+                    raise ValueError('Неверный ключ клиента')
+                global LAST_DIAG
+                if not DIAG_LOCK.acquire(blocking=False):
+                    return self.send(429, {'error':'Диагностика уже выполняется'})
+                try:
+                    if time.time()-LAST_DIAG < 10:
+                        return self.send(429, {'error':'Подождите 10 секунд перед повторной проверкой'})
+                    LAST_DIAG = time.time()
+                    return self.send(200, monitoring.diagnostics(CONTAINER, INTERFACE, key))
+                finally:
+                    DIAG_LOCK.release()
             if self.path == '/api/create':
                 name = data.get('name', '')
                 if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}', name):
@@ -266,6 +293,7 @@ if __name__ == '__main__':
     os.umask(0o077)
     STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
     with locked(): recover()
+    MONITOR.start()
     server = ThreadingHTTPServer((os.getenv('BIND','0.0.0.0'), int(os.getenv('PORT','80'))), Handler)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
