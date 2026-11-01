@@ -2,6 +2,7 @@
 import contextlib
 import ipaddress
 import json
+import os
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -105,7 +106,7 @@ def diagnostics(container, interface, key=None):
             return None
     check('Контейнер VPN', lambda:run(['docker','inspect','-f','{{.State.Running}}',container]), lambda t:('ok' if t=='true' else 'error','Запущен' if t=='true' else 'Остановлен'))
     check('Интерфейс туннеля', lambda:docker(container,'ip','link','show','dev',interface), lambda t:('ok' if 'UP' in t else 'warning', 'Интерфейс поднят' if 'UP' in t else 'Интерфейс не поднят'))
-    for label,fn in [('IP forwarding сервера',lambda:run(['cat','/proc/sys/net/ipv4/ip_forward'])),('IP forwarding контейнера',lambda:docker(container,'cat','/proc/sys/net/ipv4/ip_forward'))]:
+    for label,fn in [('IP forwarding сервера',lambda:run(['cat',os.getenv('HOST_FORWARDING_FILE','/proc/sys/net/ipv4/ip_forward')])),('IP forwarding контейнера',lambda:docker(container,'cat','/proc/sys/net/ipv4/ip_forward'))]:
         check(label,fn,lambda t:('ok' if t=='1' else 'error','Включён' if t=='1' else 'Выключен: транзит пакетов невозможен'))
     check('Маршрут в интернет',lambda:docker(container,'ip','-4','route','get','1.1.1.1'),lambda t:('ok',t))
     check('Правило NAT',lambda:docker(container,'iptables','-t','nat','-S','POSTROUTING'),lambda t:('ok' if 'MASQUERADE' in t or 'SNAT' in t else 'warning','Правило NAT найдено' if 'MASQUERADE' in t or 'SNAT' in t else 'NAT в контейнере не найден; возможна настройка на хосте'))

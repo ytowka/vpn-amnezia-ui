@@ -24,6 +24,7 @@ ROOT = Path(__file__).parent
 STATE = Path(os.getenv('STATE_DIR', '/var/lib/amnezia-ui'))
 CLIENTS = Path(os.getenv('CLIENT_DIR', '/root/awg-clients'))
 CONF = os.getenv('SERVER_CONF', '/opt/amnezia/awg/awg0.conf')
+CLIENTS_TABLE = os.getenv('CLIENTS_TABLE', '/opt/amnezia/awg/clientsTable')
 CONTAINER = os.getenv('AWG_CONTAINER', 'amnezia-awg2')
 INTERFACE = os.getenv('AWG_INTERFACE', 'awg0')
 S = core.Server(CONTAINER)
@@ -93,7 +94,7 @@ def listing():
     original = S.read(CONF)
     disabled = state()
     files = files_by_key()
-    registry = json.loads(S.read('/opt/amnezia/awg/clientsTable'))
+    registry = json.loads(S.read(CLIENTS_TABLE))
     names = {r['clientId']: r.get('userData', {}).get('clientName') for r in registry}
     live = {}
     for line in S.call('awg', 'show', INTERFACE, 'dump').stdout.splitlines()[1:]:
@@ -142,7 +143,7 @@ def mutate(key, action):
             for pub, p in files_by_key().items():
                 if pub == key:
                     p.unlink()
-            registry_path = '/opt/amnezia/awg/clientsTable'
+            registry_path = CLIENTS_TABLE
             registry = json.loads(S.read(registry_path))
             registry = [r for r in registry if r.get('clientId') != key]
             S.call('sh', '-c', 'cat > "$1"', 'sh', registry_path, data=json.dumps(registry))

@@ -1,0 +1,10 @@
+**
+!Dockerfile
+!server.py
+!awg_core.py
+!monitoring.py
+!container_init.py
+!static/
+!static/**
+!tests/
+!tests/*.py
