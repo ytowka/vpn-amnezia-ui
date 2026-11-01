@@ -4,7 +4,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-cert
     && rm -rf /var/lib/apt/lists/*
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 WORKDIR /app
-COPY server.py awg_core.py monitoring.py container_init.py ./
+COPY server.py awg_core.py monitoring.py guest_access.py container_init.py ./
 COPY static ./static
 COPY tests ./tests
 RUN python3 -m unittest discover -s tests -v

@@ -18,6 +18,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import awg_core as core
 import monitoring
+import guest_access
 from urllib.parse import urlsplit, parse_qs
 
 ROOT = Path(__file__).parent
@@ -34,6 +35,7 @@ ATTEMPTS = {}
 MONITOR = monitoring.Monitor(STATE, CONTAINER, INTERFACE)
 DIAG_LOCK = threading.Lock()
 LAST_DIAG = 0
+INVITATIONS = guest_access.Invitations(STATE)
 
 def atomic(path, value):
     tmp = path.with_suffix('.tmp')
@@ -159,15 +161,26 @@ def recover():
     for key, item in list(state().items()):
         mutate(key, 'delete' if item.get('deleting') else 'disable')
 
+def create_client(name):
+    with LOCK:
+        endpoint = os.getenv('VPN_ENDPOINT', '178.236.242.31:4956').split(':')
+        result = subprocess.run(['python3', str(ROOT/'awg_core.py'), name, '--template', os.getenv('CLIENT_TEMPLATE','/root/template.conf'), '--out-dir', str(CLIENTS), '--container',CONTAINER, '--server-conf', CONF, '--ru-ip', endpoint[0], '--ru-port',endpoint[1]], capture_output=True, text=True, timeout=90)
+        if result.returncode:
+            raise ValueError('Не удалось создать клиента: проверьте уникальность имени и серверный шаблон')
+        return (CLIENTS/(name+'.conf')).read_bytes()
+
 class Handler(BaseHTTPRequestHandler):
     server_version = 'AmneziaConsole'
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(15)
     def log_message(self, fmt, *args):
         pass  # Never log download URLs, secrets, cookies or request bodies.
     def send(self, code, value, content_type='application/json; charset=utf-8', headers=None):
         body = json.dumps(value, ensure_ascii=False).encode() if content_type.startswith('application/json') else value
         self.send_response(code)
         for k,v in {'Content-Type':content_type, 'Content-Length': str(len(body)), 'Cache-Control':'no-store',
-                    'X-Content-Type-Options':'nosniff', 'X-Frame-Options':'DENY',
+                    'Referrer-Policy':'no-referrer', 'X-Content-Type-Options':'nosniff', 'X-Frame-Options':'DENY',
                     'Content-Security-Policy': "default-src 'self'; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'", **(headers or {})}.items():
             self.send_header(k,v)
         self.end_headers()
@@ -184,13 +197,15 @@ class Handler(BaseHTTPRequestHandler):
             return item if item and item['expires'] > time.time() else None
     def do_GET(self):
         try:
-            if self.path in ('/', '/app.js', '/style.css'):
-                name = {'/':'index.html', '/app.js':'app.js', '/style.css':'style.css'}[self.path]
+            if self.path in ('/', '/app.js', '/style.css', '/guest', '/guest.js'):
+                name = {'/':'index.html', '/app.js':'app.js', '/style.css':'style.css', '/guest':'guest.html', '/guest.js':'guest.js'}[self.path]
                 mime = {'html':'text/html', 'js':'application/javascript', 'css':'text/css'}[name.split('.')[-1]]
                 return self.send(200, (ROOT/'static'/name).read_bytes(), mime + '; charset=utf-8')
             session = self.session()
             if not session:
                 return self.send(401, {'error':'Войдите в консоль'})
+            if self.path == '/api/invites':
+                return self.send(200, {'invites':INVITATIONS.listing()})
             if self.path == '/api/session':
                 return self.send(200, {'csrf':session['csrf']})
             url = urlsplit(self.path)
@@ -225,6 +240,11 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < size <= 4096:
                 return self.send(400, {'error':'Неверный размер запроса'})
             data = json.loads(self.rfile.read(size))
+            if not isinstance(data, dict):
+                raise ValueError('Ожидается объект JSON')
+            if self.path == '/api/guest/redeem':
+                name, config = INVITATIONS.redeem(data.get('key'), data.get('name'), self.client_address[0], create_client)
+                return self.send(200, config, 'application/octet-stream', {'Content-Disposition':f'attachment; filename="{name}.conf"'})
             if self.path == '/api/login':
                 with LOCK:
                     now = time.time()
@@ -251,6 +271,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(401, {'error':'Войдите в консоль'})
             if not hmac.compare_digest(self.headers.get('X-CSRF-Token',''), session['csrf']):
                 return self.send(403, {'error':'Обновите страницу'})
+            if self.path == '/api/invites/create':
+                return self.send(201, INVITATIONS.create(data.get('hours',24)))
+            if self.path == '/api/invites/revoke':
+                INVITATIONS.revoke(data.get('id',''))
+                return self.send(200, {})
             if self.path == '/api/logout':
                 with LOCK:
                     for token in list(SESSIONS):
@@ -274,17 +299,15 @@ class Handler(BaseHTTPRequestHandler):
                 name = data.get('name', '')
                 if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}', name):
                     raise ValueError('Имя: латинские буквы, цифры, _ и -, до 64 символов')
-                with LOCK:
-                    endpoint = os.getenv('VPN_ENDPOINT', '178.236.242.31:4956').split(':')
-                    result = subprocess.run(['python3', str(ROOT/'awg_core.py'), name, '--template', os.getenv('CLIENT_TEMPLATE','/root/template.conf'), '--out-dir', str(CLIENTS), '--container',CONTAINER, '--server-conf', CONF, '--ru-ip', endpoint[0], '--ru-port',endpoint[1]], capture_output=True, text=True, timeout=90)
-                    if result.returncode:
-                        raise ValueError('Не удалось создать клиента: проверьте уникальность имени и серверный шаблон')
+                create_client(name)
                 return self.send(201, {'name':name})
             if self.path == '/api/action':
                 with locked():
                     mutate(data.get('key',''), data.get('action',''))
                 return self.send(200, {})
             self.send(404, {'error':'Не найдено'})
+        except guest_access.GuestError as e:
+            self.send(e.status, {'error':str(e), 'retry_after':e.retry}, headers={'Retry-After':str(e.retry)} if e.retry else None)
         except (ValueError, TypeError, json.JSONDecodeError) as e:
             self.send(400, {'error':str(e)})
         except Exception:

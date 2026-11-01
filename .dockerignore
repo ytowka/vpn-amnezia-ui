@@ -3,6 +3,7 @@
 !server.py
 !awg_core.py
 !monitoring.py
+!guest_access.py
 !container_init.py
 !static/
 !static/**
