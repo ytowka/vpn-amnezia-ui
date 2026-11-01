@@ -1,18 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TRANSIT_IP="0.0.0.0"
-EXIT_IP="0.0.0.0"
-PORT="0"
+TRANSIT_IP="178.236.242.31"
+EXIT_IP="94.241.173.190"
+PORT="4955"
+IFACE="tun6"
 
 # Проверка прав
 if [[ $EUID -ne 0 ]]; then
     echo "Run as root: sudo bash setup-transit.sh"
-    exit 1x
+    exit 1
 fi
-
-# Определяем внешний интерфейс
-IFACE="net0"
 
 if [[ -z "$IFACE" ]]; then
     echo "Cannot detect network interface"
