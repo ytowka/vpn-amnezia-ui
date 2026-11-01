@@ -7,3 +7,5 @@ __pycache__/
 state/
 
 data/
+
+compose.override.yaml

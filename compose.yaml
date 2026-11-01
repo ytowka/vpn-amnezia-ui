@@ -14,6 +14,7 @@ services:
       CLIENTS_TABLE: ${CLIENTS_TABLE:-/opt/amnezia/awg/clientsTable}
       VPN_ENDPOINT: ${VPN_ENDPOINT:-178.236.242.31:4956}
       TLS_SAN: ${TLS_SAN:-DNS:localhost,IP:127.0.0.1}
+      TRUSTED_PROXY_TOKEN: ${TRUSTED_PROXY_TOKEN:-}
       HOST_FORWARDING_FILE: /host/ip_forward
     volumes:
       - ./data:/data

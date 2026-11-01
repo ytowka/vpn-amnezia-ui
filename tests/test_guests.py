@@ -107,3 +107,22 @@ class GuestHTTPTest(unittest.TestCase):
                 server.SESSIONS.pop(session,None)
 
 if __name__=='__main__':unittest.main()
+
+class ProxyAddressTest(unittest.TestCase):
+    def test_only_authenticated_proxy_can_supply_client_address(self):
+        import server
+        handler=object.__new__(server.Handler)
+        handler.client_address=('172.18.0.1',1234)
+        secret='a'*43
+        with patch.dict('os.environ',{'TRUSTED_PROXY_TOKEN':secret}):
+            for headers, expected in [
+                ({'X-Real-IP':'203.0.113.7'},'172.18.0.1'),
+                ({'X-Real-IP':'203.0.113.7','X-Console-Proxy-Token':'wrong'},'172.18.0.1'),
+                ({'X-Real-IP':'203.0.113.7','X-Console-Proxy-Token':secret},'203.0.113.7'),
+                ({'X-Real-IP':'2001:db8::7','X-Console-Proxy-Token':secret},'2001:db8::7'),
+                ({'X-Real-IP':'bad,ip','X-Console-Proxy-Token':secret},'172.18.0.1')]:
+                handler.headers=headers
+                self.assertEqual(handler.client_ip(),expected)
+        with patch.dict('os.environ',{'TRUSTED_PROXY_TOKEN':''}):
+            handler.headers={'X-Real-IP':'203.0.113.7','X-Console-Proxy-Token':''}
+            self.assertEqual(handler.client_ip(),'172.18.0.1')

@@ -1,0 +1,5 @@
+# Copy to compose.override.yaml on NL and set UI_IPV6 in .env.
+services:
+  console:
+    ports:
+      - "[${UI_IPV6:?Set UI_IPV6 in .env}]:${UI_IPV6_PORT:-8443}:8443"

@@ -171,6 +171,17 @@ def create_client(name):
 
 class Handler(BaseHTTPRequestHandler):
     server_version = 'AmneziaConsole'
+    def client_ip(self):
+        # Docker's IPv6 proxy may hide the upstream source IP. Authenticate the
+        # reverse proxy with a private token, not spoofable forwarding headers.
+        secret = os.getenv('TRUSTED_PROXY_TOKEN', '')
+        supplied = self.headers.get('X-Console-Proxy-Token', '')
+        if len(secret) >= 32 and hmac.compare_digest(secret.encode(), supplied.encode()):
+            try:
+                return str(ipaddress.ip_address(self.headers.get('X-Real-IP', '')))
+            except ValueError:
+                pass
+        return self.client_address[0]
     def setup(self):
         super().setup()
         self.connection.settimeout(15)
@@ -243,7 +254,7 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(data, dict):
                 raise ValueError('Ожидается объект JSON')
             if self.path == '/api/guest/redeem':
-                name, config = INVITATIONS.redeem(data.get('key'), data.get('name'), self.client_address[0], create_client)
+                name, config = INVITATIONS.redeem(data.get('key'), data.get('name'), self.client_ip(), create_client)
                 return self.send(200, config, 'application/octet-stream', {'Content-Disposition':f'attachment; filename="{name}.conf"'})
             if self.path == '/api/login':
                 with LOCK:
@@ -253,7 +264,7 @@ class Handler(BaseHTTPRequestHandler):
                         if not ATTEMPTS[ip]: del ATTEMPTS[ip]
                     for token in list(SESSIONS):
                         if SESSIONS[token]['expires'] <= now: del SESSIONS[token]
-                    attempts = ATTEMPTS.setdefault(self.client_address[0], [])
+                    attempts = ATTEMPTS.setdefault(self.client_ip(), [])
                     if len(attempts) >= 10:
                         return self.send(429, {'error':'Слишком много попыток. Подождите 15 минут.'})
                     credential = json.loads((STATE/'credentials.json').read_text())
@@ -261,7 +272,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not hmac.compare_digest(candidate, credential['hash']):
                         attempts.append(now)
                         return self.send(401, {'error':'Неверный пароль'})
-                    ATTEMPTS.pop(self.client_address[0], None)
+                    ATTEMPTS.pop(self.client_ip(), None)
                     token = secrets.token_urlsafe(32)
                     item = {'csrf': secrets.token_urlsafe(32), 'expires': now+28800}
                     SESSIONS[token] = item
